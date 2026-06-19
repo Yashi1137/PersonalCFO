@@ -1,0 +1,22 @@
+{
+  "name": "financial-os-server",
+  "version": "1.0.0",
+  "description": "Express Backend and Agents for Financial OS",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon --ignore db.json --ignore category_rules.json server.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.11.0",
+    "@notionhq/client": "^2.2.15",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.2"
+  }
+}

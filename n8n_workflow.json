@@ -1,0 +1,173 @@
+{
+  "name": "Financial OS Ingestion Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "postReceiveAction": "nothing",
+        "format": "resolved",
+        "downloadAttachments": true,
+        "options": {
+          "customEmailSources": "UNSEEN",
+          "forceUtf8": true
+        }
+      },
+      "id": "e44d5db0-b35b-432d-94ab-6e7e16df2b8f",
+      "name": "Email Read (IMAP)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        300,
+        240
+      ],
+      "credentials": {
+        "imap": {
+          "id": "mock-imap-credentials-id",
+          "name": "Your Bank/Personal Email"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$binary.attachment_0 }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if_attachment_check",
+      "name": "Has Attachment?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/process-email",
+        "sendBody": true,
+        "bodyFormat": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "subject",
+              "value": "={{ $json.subject }}"
+            },
+            {
+              "name": "body",
+              "value": "={{ $json.text || $json.html }}"
+            },
+            {
+              "name": "sender",
+              "value": "={{ $json.from.value[0].address }}"
+            },
+            {
+              "name": "date",
+              "value": "={{ $json.date }}"
+            }
+          ]
+        },
+        "sendBinaryData": true,
+        "binaryParameters": "attachment_0",
+        "options": {}
+      },
+      "id": "send_with_attach",
+      "name": "Send to CFO (with Attachment)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 41,
+      "position": [
+        740,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/process-email",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "subject",
+              "value": "={{ $json.subject }}"
+            },
+            {
+              "name": "body",
+              "value": "={{ $json.text || $json.html }}"
+            },
+            {
+              "name": "sender",
+              "value": "={{ $json.from.value[0].address }}"
+            },
+            {
+              "name": "date",
+              "value": "={{ $json.date }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "send_text_only",
+      "name": "Send to CFO (Text Only)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 41,
+      "position": [
+        740,
+        330
+      ]
+    }
+  ],
+  "connections": {
+    "Email Read (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Has Attachment?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Attachment?": {
+      "main": [
+        [
+          {
+            "node": "Send to CFO (with Attachment)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send to CFO (Text Only)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "financial_os_pipeline",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

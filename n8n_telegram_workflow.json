@@ -1,0 +1,119 @@
+{
+  "name": "Pikachu Telegram Bot Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "tel_trigger_001",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        240
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "mock-telegram-credentials-id",
+          "name": "Pikachu Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/chat",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.message.text }}"
+            },
+            {
+              "name": "history",
+              "value": "=[]"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "tel_http_002",
+      "name": "Ask Pikachu CFO",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        470,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "tel_reply_003",
+      "name": "Reply to Chat",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        690,
+        240
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "mock-telegram-credentials-id",
+          "name": "Pikachu Bot Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Ask Pikachu CFO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Pikachu CFO": {
+      "main": [
+        [
+          {
+            "node": "Reply to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "telegram_pikachu_pipeline",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
