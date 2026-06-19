@@ -980,6 +980,19 @@ app.post('/api/clear-db', async (req, res) => {
   }
 });
 
+// Serve static frontend files in production
+const clientDistPath = path.join(__dirname, '../client/dist');
+if (fs.existsSync(clientDistPath)) {
+  console.log(`Serving static files from: ${clientDistPath}`);
+  app.use(express.static(clientDistPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+}
+
 // Start Express Server
 app.listen(PORT, () => {
   console.log(`Financial OS Backend Server running on http://localhost:${PORT}`);
