@@ -897,3 +897,182 @@ export async function loadMockDataset(mockData) {
   writeLocalDb(mockData);
   return { success: true };
 }
+
+export async function setupNotionDatabases(token, parentPageId) {
+  const notionClient = new Client({ auth: token });
+
+  // 1. Create Emails DB
+  console.log("Creating Pikachu Emails DB...");
+  const emailsDb = await notionClient.databases.create({
+    parent: { page_id: parentPageId },
+    title: [{ type: 'text', text: { content: "Pikachu Emails DB" } }],
+    properties: {
+      Name: { title: {} },
+      Sender: { rich_text: {} },
+      Date: { date: {} },
+      Category: {
+        select: {
+          options: [
+            { name: "Financial Transaction" },
+            { name: "Bill" },
+            { name: "Subscription" },
+            { name: "Banking Alert" },
+            { name: "Personal" },
+            { name: "Work" },
+            { name: "Shopping" },
+            { name: "Travel" },
+            { name: "Delivery/Order" },
+            { name: "Promotional" },
+            { name: "Spam" },
+            { name: "Other" }
+          ]
+        }
+      },
+      Importance: {
+        select: {
+          options: [
+            { name: "Critical" },
+            { name: "High" },
+            { name: "Medium" },
+            { name: "Low" }
+          ]
+        }
+      },
+      ShortSummary: { rich_text: {} },
+      DetailedSummary: { rich_text: {} },
+      ActionItems: { rich_text: {} },
+      IsTransaction: { checkbox: {} }
+    }
+  });
+
+  // 2. Create Transactions DB
+  console.log("Creating Pikachu Transactions DB...");
+  const transactionsDb = await notionClient.databases.create({
+    parent: { page_id: parentPageId },
+    title: [{ type: 'text', text: { content: "Pikachu Transactions DB" } }],
+    properties: {
+      Name: { title: {} },
+      Amount: { number: { format: "number" } },
+      Type: {
+        select: {
+          options: [
+            { name: "DEBIT" },
+            { name: "CREDIT" }
+          ]
+        }
+      },
+      Category: {
+        select: {
+          options: [
+            { name: "Food" },
+            { name: "Transportation" },
+            { name: "Shopping" },
+            { name: "Utilities" },
+            { name: "Entertainment" },
+            { name: "Health" },
+            { name: "Education" },
+            { name: "Travel" },
+            { name: "Investments" },
+            { name: "Subscriptions" },
+            { name: "Transfers" },
+            { name: "Others" }
+          ]
+        }
+      },
+      Date: { date: {} },
+      RefNo: { rich_text: {} },
+      Bank: { rich_text: {} },
+      Split: { checkbox: {} },
+      Roommate: { rich_text: {} },
+      PaidBy: {
+        select: {
+          options: [
+            { name: "Me" },
+            { name: "Roommate" }
+          ]
+        }
+      },
+      Email: {
+        relation: {
+          database_id: emailsDb.id,
+          single_property: {}
+        }
+      }
+    }
+  });
+
+  // 3. Create Budgets DB
+  console.log("Creating Pikachu Budgets DB...");
+  const budgetsDb = await notionClient.databases.create({
+    parent: { page_id: parentPageId },
+    title: [{ type: 'text', text: { content: "Pikachu Budgets DB" } }],
+    properties: {
+      Name: { title: {} },
+      Limit: { number: { format: "number" } },
+      Spent: { number: { format: "number" } }
+    }
+  });
+
+  // 4. Create Subscriptions DB
+  console.log("Creating Pikachu Subscriptions DB...");
+  const subscriptionsDb = await notionClient.databases.create({
+    parent: { page_id: parentPageId },
+    title: [{ type: 'text', text: { content: "Pikachu Subscriptions DB" } }],
+    properties: {
+      Name: { title: {} },
+      Cost: { number: { format: "number" } },
+      BillingCycle: {
+        select: {
+          options: [
+            { name: "Monthly" },
+            { name: "Yearly" }
+          ]
+        }
+      },
+      NextRenewal: { date: {} },
+      Active: { checkbox: {} }
+    }
+  });
+
+  // 5. Create Bills DB
+  console.log("Creating Pikachu Bills DB...");
+  const billsDb = await notionClient.databases.create({
+    parent: { page_id: parentPageId },
+    title: [{ type: 'text', text: { content: "Pikachu Bills DB" } }],
+    properties: {
+      Name: { title: {} },
+      Amount: { number: { format: "number" } },
+      DueDate: { date: {} },
+      Status: {
+        select: {
+          options: [
+            { name: "Paid" },
+            { name: "Unpaid" }
+          ]
+        }
+      }
+    }
+  });
+
+  // Seed default budgets categories
+  const categories = ['Food', 'Transportation', 'Shopping', 'Utilities', 'Entertainment', 'Health', 'Travel', 'Investments', 'Subscriptions', 'Others'];
+  for (const cat of categories) {
+    await notionClient.pages.create({
+      parent: { database_id: budgetsDb.id },
+      properties: {
+        Name: { title: [{ text: { content: cat } }] },
+        Limit: { number: 3000 },
+        Spent: { number: 0 }
+      }
+    });
+  }
+
+  // Return the configured IDs
+  return {
+    transactions: transactionsDb.id,
+    emails: emailsDb.id,
+    budgets: budgetsDb.id,
+    subscriptions: subscriptionsDb.id,
+    bills: billsDb.id
+  };
+}

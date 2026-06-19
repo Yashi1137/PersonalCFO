@@ -25,6 +25,7 @@ import {
   addBill,
   deleteBill,
   updateBillStatus,
+  setupNotionDatabases,
   clearAllLocalDb,
   loadMockDataset,
   getMockModeStatus
@@ -38,6 +39,8 @@ import {
   cfoAgent, 
   digestAgent 
 } from './agent.js';
+
+import { startEmailPoller, stopEmailPoller } from './email-poller.js';
 
 dotenv.config();
 
@@ -76,149 +79,159 @@ function saveCategoryRules() {
 // Core Integration routes
 // ----------------------------------------------------
 
-app.post('/api/process-email', upload.any(), async (req, res) => {
-  const { subject = 'No Subject', body = '', sender = 'Unknown', date = new Date().toISOString() } = req.body;
-  
-  try {
-    console.log(`Processing incoming email: "${subject}" from ${sender}`);
-    let savedEmail = null;
-    let savedTxn = null;
-    let savedSub = null;
-    let savedBill = null;
-    let analysis = null;
+async function handleEmailIngestion({ subject = 'No Subject', body = '', sender = 'Unknown', date = new Date().toISOString(), files }) {
+  console.log(`Processing incoming email: "${subject}" from ${sender}`);
+  let savedEmail = null;
+  let savedTxn = null;
+  let savedSub = null;
+  let savedBill = null;
+  let analysis = null;
 
-    const file = req.files && req.files[0];
-    if (file) {
-      console.log(`Email has attachment: ${file.originalname} (${file.mimetype}). Parsing attachment...`);
-      // 1. Analyze PDF/image attachment using Gemini Receipt Agent
-      const parsedReceipt = await analyzeReceiptFile(file.buffer, file.mimetype);
-      console.log("Gemini parsed receipt from attachment:", parsedReceipt);
+  const file = files && files[0];
+  if (file) {
+    console.log(`Email has attachment: ${file.originalname} (${file.mimetype}). Parsing attachment...`);
+    // 1. Analyze PDF/image attachment using Gemini Receipt Agent
+    const parsedReceipt = await analyzeReceiptFile(file.buffer, file.mimetype);
+    console.log("Gemini parsed receipt from attachment:", parsedReceipt);
 
-      // 2. Add a simple Email record for logging
-      savedEmail = await addEmail({
-        subject,
-        sender,
-        date,
-        category: 'Financial Transaction',
-        importance: 'High',
-        shortSummary: `Receipt processed: ${parsedReceipt.merchant}`,
-        detailedSummary: `Automatically processed receipt attachment "${file.originalname}". Merchant: ${parsedReceipt.merchant}, Amount: ₹${parsedReceipt.amount}.`,
-        actionItems: parsedReceipt.isBill ? `Pay invoice from ${parsedReceipt.merchant} by ${parsedReceipt.dueDate}` : '',
-        isTransaction: !parsedReceipt.isBill
+    // 2. Add a simple Email record for logging
+    savedEmail = await addEmail({
+      subject,
+      sender,
+      date,
+      category: 'Financial Transaction',
+      importance: 'High',
+      shortSummary: `Receipt processed: ${parsedReceipt.merchant}`,
+      detailedSummary: `Automatically processed receipt attachment "${file.originalname}". Merchant: ${parsedReceipt.merchant}, Amount: ₹${parsedReceipt.amount}.`,
+      actionItems: parsedReceipt.isBill ? `Pay invoice from ${parsedReceipt.merchant} by ${parsedReceipt.dueDate}` : '',
+      isTransaction: !parsedReceipt.isBill
+    });
+
+    // 3. Process Transaction or Bill based on parser results
+    if (parsedReceipt.isBill) {
+      savedBill = await addBill({
+        name: parsedReceipt.merchant || 'Unknown Merchant',
+        amount: parsedReceipt.amount || 0,
+        dueDate: parsedReceipt.dueDate || new Date().toISOString().split('T')[0],
+        status: 'Unpaid'
       });
-
-      // 3. Process Transaction or Bill based on parser results
-      if (parsedReceipt.isBill) {
-        savedBill = await addBill({
-          name: parsedReceipt.merchant || 'Unknown Merchant',
-          amount: parsedReceipt.amount || 0,
-          dueDate: parsedReceipt.dueDate || new Date().toISOString().split('T')[0],
-          status: 'Unpaid'
-        });
-      } else {
-        let txnCategory = parsedReceipt.category || 'Others';
-        const merchantKey = (parsedReceipt.merchant || '').toLowerCase();
-        
-        // Apply categorization preference
-        if (categoryRules[merchantKey]) {
-          txnCategory = categoryRules[merchantKey];
-        }
-
-        savedTxn = await addTransaction({
-          merchant: parsedReceipt.merchant || 'Unknown Merchant',
-          amount: parsedReceipt.amount || 0,
-          type: parsedReceipt.type || 'DEBIT',
-          category: txnCategory,
-          date: parsedReceipt.date || date,
-          refNo: parsedReceipt.refNo || '',
-          bank: parsedReceipt.bank || 'Email Attachment',
-          emailId: savedEmail.id
-        });
-      }
-
-      analysis = {
-        category: 'Financial Transaction',
-        importance: 'High',
-        shortSummary: `Receipt processed: ${parsedReceipt.merchant}`,
-        detailedSummary: `Successfully extracted financial details from attachment.`,
-        isTransaction: !parsedReceipt.isBill,
-        transaction: parsedReceipt.isBill ? null : parsedReceipt,
-        isBill: parsedReceipt.isBill,
-        bill: parsedReceipt.isBill ? parsedReceipt : null
-      };
-
     } else {
-      // Fallback to text email analysis
-      if (!subject && !body) {
-        return res.status(400).json({ error: "Missing subject or body in request payload." });
-      }
-
-      // 1. Run Email Intelligence Agent
-      analysis = await analyzeEmail({ subject, body, sender, date });
+      let txnCategory = parsedReceipt.category || 'Others';
+      const merchantKey = (parsedReceipt.merchant || '').toLowerCase();
       
-      // 2. Add Email record
-      savedEmail = await addEmail({
-        subject,
-        sender,
-        date,
-        category: analysis.category,
-        importance: analysis.importance,
-        shortSummary: analysis.shortSummary,
-        detailedSummary: analysis.detailedSummary,
-        actionItems: analysis.actionItems,
-        isTransaction: analysis.isTransaction
+      // Apply categorization preference
+      if (categoryRules[merchantKey]) {
+        txnCategory = categoryRules[merchantKey];
+      }
+
+      savedTxn = await addTransaction({
+        merchant: parsedReceipt.merchant || 'Unknown Merchant',
+        amount: parsedReceipt.amount || 0,
+        type: parsedReceipt.type || 'DEBIT',
+        category: txnCategory,
+        date: parsedReceipt.date || date,
+        refNo: parsedReceipt.refNo || '',
+        bank: parsedReceipt.bank || 'Email Attachment',
+        emailId: savedEmail.id
       });
-
-      // 3. Process Transaction if detected
-      if (analysis.isTransaction && analysis.transaction) {
-        let txnCategory = analysis.transaction.category || 'Others';
-        const merchantName = analysis.transaction.merchant.toLowerCase();
-        
-        if (categoryRules[merchantName]) {
-          txnCategory = categoryRules[merchantName];
-        }
-
-        savedTxn = await addTransaction({
-          merchant: analysis.transaction.merchant,
-          amount: analysis.transaction.amount,
-          type: analysis.transaction.type,
-          category: txnCategory,
-          date: analysis.transaction.date || date,
-          refNo: analysis.transaction.refNo,
-          bank: analysis.transaction.bank,
-          emailId: savedEmail.id
-        });
-      }
-
-      // 4. Process Subscription if detected
-      if (analysis.isSubscription && analysis.subscription) {
-        savedSub = await addSubscription({
-          name: analysis.subscription.name,
-          cost: analysis.subscription.cost,
-          billingCycle: analysis.subscription.billingCycle,
-          nextRenewal: analysis.subscription.nextRenewal
-        });
-      }
-
-      // 5. Process Bill if detected
-      if (analysis.isBill && analysis.bill) {
-        savedBill = await addBill({
-          name: analysis.bill.name,
-          amount: analysis.bill.amount,
-          dueDate: analysis.bill.dueDate,
-          status: 'Unpaid'
-        });
-      }
     }
 
-    res.json({
-      success: true,
-      email: savedEmail,
-      transaction: savedTxn,
-      subscription: savedSub,
-      bill: savedBill,
-      analysis
+    analysis = {
+      category: 'Financial Transaction',
+      importance: 'High',
+      shortSummary: `Receipt processed: ${parsedReceipt.merchant}`,
+      detailedSummary: `Successfully extracted financial details from attachment.`,
+      isTransaction: !parsedReceipt.isBill,
+      transaction: parsedReceipt.isBill ? null : parsedReceipt,
+      isBill: parsedReceipt.isBill,
+      bill: parsedReceipt.isBill ? parsedReceipt : null
+    };
+
+  } else {
+    // Fallback to text email analysis
+    if (!subject && !body) {
+      throw new Error("Missing subject or body in request payload.");
+    }
+
+    // 1. Run Email Intelligence Agent
+    analysis = await analyzeEmail({ subject, body, sender, date });
+    
+    // 2. Add Email record
+    savedEmail = await addEmail({
+      subject,
+      sender,
+      date,
+      category: analysis.category,
+      importance: analysis.importance,
+      shortSummary: analysis.shortSummary,
+      detailedSummary: analysis.detailedSummary,
+      actionItems: analysis.actionItems,
+      isTransaction: analysis.isTransaction
     });
+
+    // 3. Process Transaction if detected
+    if (analysis.isTransaction && analysis.transaction) {
+      let txnCategory = analysis.transaction.category || 'Others';
+      const merchantName = analysis.transaction.merchant.toLowerCase();
+      
+      if (categoryRules[merchantName]) {
+        txnCategory = categoryRules[merchantName];
+      }
+
+      savedTxn = await addTransaction({
+        merchant: analysis.transaction.merchant,
+        amount: analysis.transaction.amount,
+        type: analysis.transaction.type,
+        category: txnCategory,
+        date: analysis.transaction.date || date,
+        refNo: analysis.transaction.refNo,
+        bank: analysis.transaction.bank,
+        emailId: savedEmail.id
+      });
+    }
+
+    // 4. Process Subscription if detected
+    if (analysis.isSubscription && analysis.subscription) {
+      savedSub = await addSubscription({
+        name: analysis.subscription.name,
+        cost: analysis.subscription.cost,
+        billingCycle: analysis.subscription.billingCycle,
+        nextRenewal: analysis.subscription.nextRenewal
+      });
+    }
+
+    // 5. Process Bill if detected
+    if (analysis.isBill && analysis.bill) {
+      savedBill = await addBill({
+        name: analysis.bill.name,
+        amount: analysis.bill.amount,
+        dueDate: analysis.bill.dueDate,
+        status: 'Unpaid'
+      });
+    }
+  }
+
+  return {
+    email: savedEmail,
+    transaction: savedTxn,
+    subscription: savedSub,
+    bill: savedBill,
+    analysis
+  };
+}
+
+app.post('/api/process-email', upload.any(), async (req, res) => {
+  const { subject, body, sender, date } = req.body;
+  
+  try {
+    const result = await handleEmailIngestion({
+      subject,
+      body,
+      sender,
+      date,
+      files: req.files
+    });
+    res.json({ success: true, ...result });
   } catch (err) {
     console.error("Error processing email webhook:", err);
     res.status(500).json({ error: err.message });
@@ -493,22 +506,171 @@ app.delete('/api/bills/:id', async (req, res) => {
   }
 });
 
-// Settings Config routes
-app.post('/api/settings', async (req, res) => {
-  const { geminiApiKey, notionToken, databaseIds } = req.body;
+const ENV_PATH = path.join(__dirname, '.env');
+
+function writeEnvConfig(updates) {
+  let envContent = '';
+  if (fs.existsSync(ENV_PATH)) {
+    envContent = fs.readFileSync(ENV_PATH, 'utf8');
+  }
   
+  Object.entries(updates).forEach(([key, val]) => {
+    if (val === undefined || val === null) return;
+    
+    // Update process.env in-memory
+    process.env[key] = String(val);
+    
+    // Replace in file content
+    const regex = new RegExp(`^#?\\s*${key}=.*$`, 'gm');
+    if (envContent.match(regex)) {
+      envContent = envContent.replace(regex, `${key}=${val}`);
+    } else {
+      if (envContent.length > 0 && !envContent.endsWith('\n')) {
+        envContent += '\n';
+      }
+      envContent += `${key}=${val}`;
+    }
+  });
+  
+  fs.writeFileSync(ENV_PATH, envContent.trim() + '\n');
+}
+
+function maskSecret(val) {
+  if (!val) return '';
+  if (val.length <= 8) return '******';
+  return val.slice(0, 4) + '******' + val.slice(-4);
+}
+
+function initializeEmailPoller() {
+  const email = process.env.EMAIL_ADDRESS;
+  const password = process.env.EMAIL_PASSWORD;
+  if (email && password) {
+    startEmailPoller(
+      {
+        email,
+        password
+      },
+      async (emailData) => {
+        try {
+          await handleEmailIngestion(emailData);
+        } catch (err) {
+          console.error("Error processing email from poller:", err);
+        }
+      }
+    );
+  } else {
+    stopEmailPoller();
+  }
+}
+
+// Settings Config routes
+app.get('/api/settings', (req, res) => {
+  res.json({
+    geminiApiKey: maskSecret(process.env.GEMINI_API_KEY),
+    notionToken: maskSecret(process.env.NOTION_INTEGRATION_TOKEN),
+    databaseIds: {
+      transactions: process.env.NOTION_TRANSACTIONS_DB_ID || '',
+      emails: process.env.NOTION_EMAILS_DB_ID || '',
+      budgets: process.env.NOTION_BUDGETS_DB_ID || '',
+      subscriptions: process.env.NOTION_SUBSCRIPTIONS_DB_ID || '',
+      bills: process.env.NOTION_BILLS_DB_ID || ''
+    },
+    emailAddress: process.env.EMAIL_ADDRESS || '',
+    hasEmailPassword: !!process.env.EMAIL_PASSWORD,
+    isMockMode: getMockModeStatus()
+  });
+});
+
+app.post('/api/setup-notion', async (req, res) => {
+  const { notionToken, parentPageId } = req.body;
+  if (!notionToken || !parentPageId) {
+    return res.status(400).json({ error: "Missing notionToken or parentPageId" });
+  }
+
   try {
-    // Reconfigure database connections
+    console.log("Setting up Notion databases...");
+    const dbIds = await setupNotionDatabases(notionToken, parentPageId);
+    console.log("Notion databases created successfully:", dbIds);
+
+    // Save to .env
+    writeEnvConfig({
+      NOTION_INTEGRATION_TOKEN: notionToken,
+      NOTION_TRANSACTIONS_DB_ID: dbIds.transactions,
+      NOTION_EMAILS_DB_ID: dbIds.emails,
+      NOTION_BUDGETS_DB_ID: dbIds.budgets,
+      NOTION_SUBSCRIPTIONS_DB_ID: dbIds.subscriptions,
+      NOTION_BILLS_DB_ID: dbIds.bills
+    });
+
+    // Reconfigure database connections in memory
     configureDatabase({
       notionToken,
-      databaseIds
+      databaseIds: dbIds
     });
+
+    res.json({
+      success: true,
+      databaseIds: dbIds
+    });
+  } catch (err) {
+    console.error("Error during automatic Notion setup:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings', async (req, res) => {
+  const { geminiApiKey, notionToken, databaseIds, emailAddress, emailPassword } = req.body;
+  
+  try {
+    const updates = {};
     
-    // Reconfigure Gemini agent
-    configureAgent(geminiApiKey);
+    // Only update if not returning masked values
+    if (geminiApiKey && !geminiApiKey.includes('******')) {
+      updates.GEMINI_API_KEY = geminiApiKey;
+      configureAgent(geminiApiKey);
+    }
+    
+    if (notionToken && !notionToken.includes('******')) {
+      updates.NOTION_INTEGRATION_TOKEN = notionToken;
+    }
+
+    if (databaseIds) {
+      if (databaseIds.transactions) updates.NOTION_TRANSACTIONS_DB_ID = databaseIds.transactions;
+      if (databaseIds.emails) updates.NOTION_EMAILS_DB_ID = databaseIds.emails;
+      if (databaseIds.budgets) updates.NOTION_BUDGETS_DB_ID = databaseIds.budgets;
+      if (databaseIds.subscriptions) updates.NOTION_SUBSCRIPTIONS_DB_ID = databaseIds.subscriptions;
+      if (databaseIds.bills) updates.NOTION_BILLS_DB_ID = databaseIds.bills;
+    }
+
+    if (emailAddress !== undefined) {
+      updates.EMAIL_ADDRESS = emailAddress;
+    }
+    
+    if (emailPassword && !emailPassword.includes('******')) {
+      updates.EMAIL_PASSWORD = emailPassword;
+    }
+
+    // Write updates to .env file
+    writeEnvConfig(updates);
+    
+    // Reconfigure database in memory
+    configureDatabase({
+      notionToken: process.env.NOTION_INTEGRATION_TOKEN,
+      databaseIds: {
+        transactions: process.env.NOTION_TRANSACTIONS_DB_ID,
+        emails: process.env.NOTION_EMAILS_DB_ID,
+        budgets: process.env.NOTION_BUDGETS_DB_ID,
+        subscriptions: process.env.NOTION_SUBSCRIPTIONS_DB_ID,
+        bills: process.env.NOTION_BILLS_DB_ID
+      }
+    });
+
+    // Reconfigure and restart email poller
+    initializeEmailPoller();
     
     res.json({ success: true, isMockMode: getMockModeStatus() });
   } catch (err) {
+    console.error("Error saving settings:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -821,4 +983,5 @@ app.post('/api/clear-db', async (req, res) => {
 // Start Express Server
 app.listen(PORT, () => {
   console.log(`Financial OS Backend Server running on http://localhost:${PORT}`);
+  initializeEmailPoller();
 });
