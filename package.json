@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "AI-Powered Personal CFO & Financial Operating System using n8n and Notion",
   "scripts": {
+    "postinstall": "npm install --prefix server && npm install --prefix client && npm run build --prefix client",
     "install-all": "npm install && npm install --prefix server && npm install --prefix client",
     "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
     "start": "node server/server.js",
